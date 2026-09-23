@@ -36,20 +36,18 @@ def fetch_data_and_analyze(stock_id):
     start_date = (
         pd.Timestamp.now() - pd.Timedelta(days=80)
     ).strftime("%Y-%m-%d")
-    chip_df = dl.taiwan_stock_institutional_investors_buy_sell(
-        stock_id=stock_id, start_date=start_date
-    )
+    # 修改為新版 FinMind API 名稱
+chip_df = dl.taiwan_stock_institutional_investors(
+    stock_id=stock_id, start_date=start_date
+)
 
-    if chip_df.empty:
-        print(f"[{stock_id}] 查無籌碼資料，跳過。")
-        return None
+if chip_df.empty:
+    print(f"[{stock_id}] 查無籌碼資料，跳過。")
+    return None
 
-    # 加總三大法人每日淨買賣超
-    daily_chip = (
-        chip_df.groupby("date")["buy"]
-        .sum()
-        - chip_df.groupby("date")["sell"].sum()
-    )
+# 新版資料結構：計算每日淨買超 (買進 - 賣出)
+chip_df['net_buy'] = chip_df['buy'] - chip_df['sell']
+daily_chip = chip_df.groupby('date')['net_buy'].sum()                
     recent_chip = daily_chip.tail(WINDOW_DAYS)
 
     if len(recent_chip) < WINDOW_DAYS:
