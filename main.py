@@ -83,43 +83,63 @@ def fetch_data_and_analyze(stock_id):
         f"[{stock_id}] 買超天數: {buy_days_count}/{WINDOW_DAYS} | 30天振幅: {amplitude_pct:.2f}%"
     )
 
+    # 判斷狀態
     if has_quiet_accumulation and is_low_volatility:
-        status = "🚀 帶量突破中" if is_breakout else "⏳ 箱型壓盤吸籌中"
-        return {
-            "stock_id": stock_id,
-            "buy_days": buy_days_count,
-            "amplitude": amplitude_pct,
-            "latest_close": latest_close,
-            "period_high": period_high,
-            "period_low": period_low,
-            "status": status,
-        }
+        status = "🚀 帶量突破中" if is_breakout else "🎯 完美符合（吸籌+壓盤）"
+        is_hit = True
+    else:
+        status = "⏳ 籌碼沉澱中（未達雙門檻）"
+        is_hit = False
 
-    return None
+    return {
+        "stock_id": stock_id,
+        "buy_days": buy_days_count,
+        "amplitude": amplitude_pct,
+        "latest_close": latest_close,
+        "period_high": period_high,
+        "period_low": period_low,
+        "status": status,
+        "is_hit": is_hit,
+    }
 
 
 # ==========================================
-# ✉️ 3. Email 自動通知功能
+# ✉️ 3. Email 自動通知功能 (改為每日固定回報)
 # ==========================================
-def send_email_alert(matched_stocks):
-    if not matched_stocks:
-        print("今日無符合黑馬條件之股票，不發送 Email。")
-        return
+def send_email_alert(all_results):
+    hit_stocks = [s for s in all_results if s["is_hit"]]
 
-    subject = f"🎯 【籌碼黑馬警報】抓到 {len(matched_stocks)} 檔暗中吸籌+壓盤股！"
+    today_str = pd.Timestamp.now().strftime("%Y-%m-%d")
 
-    content = "親愛的投資人：\n\n根據『30天內20天買超 + 股價狹窄橫盤』策略，為您監控到以下潛力個股：\n\n"
+    # 根據是否有抓到符合條件的標的，調整主旨
+    if hit_stocks:
+        subject = f"🎯 【籌碼黑馬警報】{today_str} 抓到 {len(hit_stocks)} 檔暗中吸籌+壓盤股！"
+    else:
+        subject = f"📊 【每日籌碼戰報】{today_str} 今日無精準符合標的（系統運作正常）"
+
+    content = f"親愛的投資人：\n\n以下是 {today_str} 盤後『30天內20天買超 + 股價狹窄橫盤』策略的監控報告：\n\n"
+
+    if hit_stocks:
+        content += "🔥 【符合吸籌+壓盤條件之精選標的】\n"
+        content += "=" * 60 + "\n"
+        for stock in hit_stocks:
+            content += f"📌 股票代號：{stock['stock_id']}\n"
+            content += f"   - 狀態評估：{stock['status']}\n"
+            content += f"   - 30天法人買超天數：{stock['buy_days']} / {WINDOW_DAYS} 天\n"
+            content += f"   - 30天極限振幅：{stock['amplitude']:.2f}%\n"
+            content += f"   - 最新收盤價：{stock['latest_close']:.2f} (30天區間: {stock['period_low']:.2f} ~ {stock['period_high']:.2f})\n"
+            content += "-" * 60 + "\n"
+        content += "\n"
+
+    content += "📋 【全清單即時籌碼進度追蹤】\n"
     content += "=" * 60 + "\n"
+    for stock in all_results:
+        content += f"・[{stock['stock_id']}] 買超天數: {stock['buy_days']}/{WINDOW_DAYS} 天 | 振幅: {stock['amplitude']:.2f}% | 狀態: {stock['status']}\n"
 
-    for stock in matched_stocks:
-        content += f"📌 股票代號：{stock['stock_id']}\n"
-        content += f"   - 狀態評估：{stock['status']}\n"
-        content += f"   - 30天法人買超天數：{stock['buy_days']} / {WINDOW_DAYS} 天\n"
-        content += f"   - 30天極限振幅：{stock['amplitude']:.2f}%\n"
-        content += f"   - 最新收盤價：{stock['latest_close']:.2f} (30天區間: {stock['period_low']:.2f} ~ {stock['period_high']:.2f})\n"
-        content += "-" * 60 + "\n"
-
-    content += "\n💡 操盤建議：若狀態顯示『帶量突破中』，可特別留意成交量是否放大並考慮進場；若仍在『箱型壓盤吸籌中』，可加入觀察名單等待突破。"
+    content += "\n" + "=" * 60 + "\n"
+    content += (
+        "💡 備註：若無顯示精選標的，代表今日清單內個股籌碼洗牌或波動尚未完全收斂至 10% 內。"
+    )
 
     msg = MIMEText(content, "plain", "utf-8")
     msg["Subject"] = Header(subject, "utf-8")
@@ -131,7 +151,7 @@ def send_email_alert(matched_stocks):
         server.login(SENDER_EMAIL, SENDER_PASSWORD)
         server.sendmail(SENDER_EMAIL, [RECEIVER_EMAIL], msg.as_string())
         server.quit()
-        print("✅ Email 警報通知已成功寄出！")
+        print("✅ 每日戰報 Email 已成功寄出！")
     except Exception as e:
         print(f"❌ Email 發送失敗，錯誤訊息: {e}")
 
@@ -142,10 +162,13 @@ def send_email_alert(matched_stocks):
 if __name__ == "__main__":
     print("🔍 開始執行『籌碼暗中吸貨 + 壓盤橫盤』掃描程式...")
 
-    matched_results = []
+    all_results = []
     for stock in STOCK_LIST:
         result = fetch_data_and_analyze(stock)
         if result:
-            matched_results.append(result)
+            all_results.append(result)
 
-    send_email_alert(matched_results)
+    if all_results:
+        send_email_alert(all_results)
+    else:
+        print("⚠️ 查無任何股票資料，無法組成報告。")
