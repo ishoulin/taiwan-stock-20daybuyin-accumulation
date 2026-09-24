@@ -1,174 +1,135 @@
 import os
 import smtplib
-from email.header import Header
 from email.mime.text import MIMEText
-import numpy as np
+from email.mime.multipart import MIMEMultipart
 import pandas as pd
-from FinMind.data import DataLoader
 import yfinance as yf
+from FinMind.Data import Load
 
-# ==========================================
-# ⚙️ 1. 從環境變數讀取安全設定
-# ==========================================
-FINMIND_TOKEN = os.environ.get("FINMIND_TOKEN")
-SENDER_EMAIL = os.environ.get("SENDER_EMAIL")
-SENDER_PASSWORD = os.environ.get("SENDER_PASSWORD")
-RECEIVER_EMAIL = os.environ.get("RECEIVER_EMAIL")
+# ================= 參數設定 =================
+STOCK_LIST = ["2330", "2454", "2303", "2317", "3037"]  # 監控股票清單
+DAYS_WINDOW = 30        # 觀測天數 window
+MIN_BUY_DAYS = 20       # 最少買超天數門檻
+MAX_AMPLITUDE = 20.0    # 振幅門檻上限 (%) -> 已從 10.0% 放寬至 20.0%
 
-# 監控股票清單 (台股代碼，不加 .TW)
-STOCK_LIST = ["2330", "2454", "2303", "2317", "3037"]
+SENDER_EMAIL = os.getenv("SENDER_EMAIL")
+SENDER_PASSWORD = os.getenv("SENDER_PASSWORD")
+RECEIVER_EMAIL = os.getenv("RECEIVER_EMAIL")
+FINMIND_TOKEN = os.getenv("FINMIND_TOKEN", "")
 
-# 策略參數
-WINDOW_DAYS = 30  # 觀察 30 個交易日
-MIN_BUY_DAYS = 20  # 30 天內要有 20 天法人/主力淨買超
-MAX_AMPLITUDE_PCT = 10.0  # 30 天內最高低價總振幅上限 (壓盤/死沉條件 %)
-
-
-# ==========================================
-# 📊 2. 籌碼與股價核心邏輯
-# ==========================================
-def fetch_data_and_analyze(stock_id):
-    dl = DataLoader()
-    if FINMIND_TOKEN:
-        dl.login_by_token(api_token=FINMIND_TOKEN)
-
-    # 抓取近 80 天資料以確保包含 30 個交易日
-    start_date = (
-        pd.Timestamp.now() - pd.Timedelta(days=80)
-    ).strftime("%Y-%m-%d")
-
-    # 新版 FinMind API 抓取三大法人
-    chip_df = dl.taiwan_stock_institutional_investors(
-        stock_id=stock_id, start_date=start_date
-    )
-
-    if chip_df.empty:
-        print(f"[{stock_id}] 查無籌碼資料，跳過。")
-        return None
-
-    # 計算每日淨買超
-    chip_df["net_buy"] = chip_df["buy"] - chip_df["sell"]
-    daily_chip = chip_df.groupby("date")["net_buy"].sum()
-    recent_chip = daily_chip.tail(WINDOW_DAYS)
-
-    if len(recent_chip) < WINDOW_DAYS:
-        print(f"[{stock_id}] 籌碼交易日數不足 {WINDOW_DAYS} 天，跳過。")
-        return None
-
-    buy_days_count = (recent_chip > 0).sum()
-
-    # 取得股價振幅資料
-    ticker_symbol = f"{stock_id}.TW"
-    price_df = yf.download(
-        ticker_symbol, period="3mo", interval="1d", progress=False
-    )
-
-    if price_df.empty or len(price_df) < WINDOW_DAYS:
-        print(f"[{stock_id}] 股價資料不足，跳過。")
-        return None
-
-    recent_price = price_df.tail(WINDOW_DAYS)
-
-    period_high = float(recent_price["High"].max())
-    period_low = float(recent_price["Low"].min())
-    latest_close = float(recent_price["Close"].iloc[-1])
-
-    amplitude_pct = ((period_high - period_low) / period_low) * 100
-
-    has_quiet_accumulation = buy_days_count >= MIN_BUY_DAYS
-    is_low_volatility = amplitude_pct <= MAX_AMPLITUDE_PCT
-    is_breakout = latest_close >= (period_high * 0.98)
-
-    print(
-        f"[{stock_id}] 買超天數: {buy_days_count}/{WINDOW_DAYS} | 30天振幅: {amplitude_pct:.2f}%"
-    )
-
-    # 判斷狀態
-    if has_quiet_accumulation and is_low_volatility:
-        status = "🚀 帶量突破中" if is_breakout else "🎯 完美符合（吸籌+壓盤）"
-        is_hit = True
-    else:
-        status = "⏳ 籌碼沉澱中（未達雙門檻）"
-        is_hit = False
-
-    return {
-        "stock_id": stock_id,
-        "buy_days": buy_days_count,
-        "amplitude": amplitude_pct,
-        "latest_close": latest_close,
-        "period_high": period_high,
-        "period_low": period_low,
-        "status": status,
-        "is_hit": is_hit,
-    }
-
-
-# ==========================================
-# ✉️ 3. Email 自動通知功能 (改為每日固定回報)
-# ==========================================
-def send_email_alert(all_results):
-    hit_stocks = [s for s in all_results if s["is_hit"]]
-
-    today_str = pd.Timestamp.now().strftime("%Y-%m-%d")
-
-    # 根據是否有抓到符合條件的標的，調整主旨
-    if hit_stocks:
-        subject = f"🎯 【籌碼黑馬警報】{today_str} 抓到 {len(hit_stocks)} 檔暗中吸籌+壓盤股！"
-    else:
-        subject = f"📊 【每日籌碼戰報】{today_str} 今日無精準符合標的（系統運作正常）"
-
-    content = f"親愛的投資人：\n\n以下是 {today_str} 盤後『30天內20天買超 + 股價狹窄橫盤』策略的監控報告：\n\n"
-
-    if hit_stocks:
-        content += "🔥 【符合吸籌+壓盤條件之精選標的】\n"
-        content += "=" * 60 + "\n"
-        for stock in hit_stocks:
-            content += f"📌 股票代號：{stock['stock_id']}\n"
-            content += f"   - 狀態評估：{stock['status']}\n"
-            content += f"   - 30天法人買超天數：{stock['buy_days']} / {WINDOW_DAYS} 天\n"
-            content += f"   - 30天極限振幅：{stock['amplitude']:.2f}%\n"
-            content += f"   - 最新收盤價：{stock['latest_close']:.2f} (30天區間: {stock['period_low']:.2f} ~ {stock['period_high']:.2f})\n"
-            content += "-" * 60 + "\n"
-        content += "\n"
-
-    content += "📋 【全清單即時籌碼進度追蹤】\n"
-    content += "=" * 60 + "\n"
-    for stock in all_results:
-        content += f"・[{stock['stock_id']}] 買超天數: {stock['buy_days']}/{WINDOW_DAYS} 天 | 振幅: {stock['amplitude']:.2f}% | 狀態: {stock['status']}\n"
-
-    content += "\n" + "=" * 60 + "\n"
-    content += (
-        "💡 備註：若無顯示精選標的，代表今日清單內個股籌碼洗牌或波動尚未完全收斂至 10% 內。"
-    )
-
-    msg = MIMEText(content, "plain", "utf-8")
-    msg["Subject"] = Header(subject, "utf-8")
-    msg["From"] = SENDER_EMAIL
-    msg["To"] = RECEIVER_EMAIL
-
+def get_institutional_data(stock_id):
+    """取得 FinMind 法人買超資料"""
     try:
-        server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
+        DL = Load()
+        if FINMIND_TOKEN:
+            DL.login_by_token(api_token=FINMIND_TOKEN)
+        
+        # 抓取近 60 天資料以確保扣除假日後仍有 30 個交易日
+        start_date = (pd.Timestamp.now() - pd.Timedelta(days=60)).strftime('%Y-%m-%d')
+        df = DL.taiwan_stock_institutional_investors_buy_sell(
+            stock_id=stock_id,
+            start_date=start_date
+        )
+        if df.empty:
+            return 0, 0
+        
+        # 加總三大法人每日買賣超
+        df_grouped = df.groupby(['date', 'stock_id'])['buy_sell'].sum().reset_index()
+        recent_df = df_grouped.tail(DAYS_WINDOW)
+        
+        buy_days = (recent_df['buy_sell'] > 0).sum()
+        total_days = len(recent_df)
+        return buy_days, total_days
+    except Exception as e:
+        print(f"FinMind 讀取 {stock_id} 失敗: {e}")
+        return 0, 0
+
+def get_stock_amplitude(stock_id):
+    """取得 yfinance 近 30 個交易日最高低點振幅 (%)"""
+    try:
+        ticker = f"{stock_id}.TW"
+        stock = yf.Ticker(ticker)
+        hist = stock.history(period="2m") # 抓取 2 個月資料
+        if hist.empty or len(hist) < DAYS_WINDOW:
+            ticker = f"{stock_id}.TWO" # 嘗試櫃買中心
+            stock = yf.Ticker(ticker)
+            hist = stock.history(period="2m")
+            
+        recent_hist = hist.tail(DAYS_WINDOW)
+        if recent_hist.empty:
+            return 0.0
+        
+        highest = recent_hist['High'].max()
+        lowest = recent_hist['Low'].min()
+        
+        if lowest == 0 or pd.isna(lowest):
+            return 0.0
+            
+        amplitude = ((highest - lowest) / lowest) * 100
+        return round(amplitude, 2)
+    except Exception as e:
+        print(f"yfinance 讀取 {stock_id} 失敗: {e}")
+        return 0.0
+
+def send_email(subject, body):
+    """發送 Gmail SMTP 戰報"""
+    if not SENDER_EMAIL or not SENDER_PASSWORD or not RECEIVER_EMAIL:
+        print("❌ 缺少 Email 設定變數，取消寄送。")
+        return
+        
+    try:
+        msg = MIMEMultipart()
+        msg['From'] = SENDER_EMAIL
+        msg['To'] = RECEIVER_EMAIL
+        msg['Subject'] = subject
+        msg.attach(MIMEText(body, 'plain', 'utf-8'))
+
+        server = smtplib.SMTP('smtp.gmail.com', 587)
+        server.starttls()
         server.login(SENDER_EMAIL, SENDER_PASSWORD)
-        server.sendmail(SENDER_EMAIL, [RECEIVER_EMAIL], msg.as_string())
+        server.send_message(msg)
         server.quit()
         print("✅ 每日戰報 Email 已成功寄出！")
     except Exception as e:
         print(f"❌ Email 發送失敗，錯誤訊息: {e}")
 
+def main():
+    report_lines = []
+    matched_stocks = []
+    
+    print("🚀 開始執行台股籌碼掃描...")
+    
+    for stock_id in STOCK_LIST:
+        buy_days, total_days = get_institutional_data(stock_id)
+        amplitude = get_stock_amplitude(stock_id)
+        
+        # 判斷門檻：買超天數 >= 20 且 振幅 <= 20%
+        is_buy_pass = buy_days >= MIN_BUY_DAYS
+        is_amp_pass = amplitude <= MAX_AMPLITUDE and amplitude > 0
+        
+        status_str = ""
+        if is_buy_pass and is_amp_pass:
+            status_str = "🔥 符合潛伏吸籌雙門檻！"
+            matched_stocks.append(stock_id)
+        else:
+            status_str = "籌碼沉澱中（未達雙門檻）"
+            
+        line = f"・[{stock_id}] 買超天數: {buy_days}/{total_days} 天 | 振幅: {amplitude}% | 狀態: {status_str}"
+        report_lines.append(line)
+        print(line)
 
-# ==========================================
-# 🚀 4. 主程式入口
-# ==========================================
+    # 組裝 Email 內文
+    today_str = pd.Timestamp.now().strftime('%Y-%m-%d')
+    subject = f"【台股籌碼每日戰報】{today_str} - 符合目標: {len(matched_stocks)} 檔"
+    
+    body = f"📊 台股靜默籌碼收集掃描報告 ({today_str})\n"
+    body += f"篩選標準：近 {DAYS_WINDOW} 日法人買超 ≥ {MIN_BUY_DAYS} 天，且價格振幅 ≤ {MAX_AMPLITUDE}%\n"
+    body += "--------------------------------------------------\n\n"
+    body += "\n".join(report_lines)
+    body += "\n\n--------------------------------------------------\n"
+    body += "🤖 本郵件由 GitHub Actions 自動系統發送（每日心跳報告）。"
+
+    send_email(subject, body)
+
 if __name__ == "__main__":
-    print("🔍 開始執行『籌碼暗中吸貨 + 壓盤橫盤』掃描程式...")
-
-    all_results = []
-    for stock in STOCK_LIST:
-        result = fetch_data_and_analyze(stock)
-        if result:
-            all_results.append(result)
-
-    if all_results:
-        send_email_alert(all_results)
-    else:
-        print("⚠️ 查無任何股票資料，無法組成報告。")
+    main()
