@@ -4,13 +4,13 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 import pandas as pd
 import yfinance as yf
-from FinMind.Data import Load
+from FinMind.data import DataLoader  # 修正：更新為正確的 DataLoader 載入路徑
 
 # ================= 參數設定 =================
 STOCK_LIST = ["2330", "2454", "2303", "2317", "3037"]  # 監控股票清單
 DAYS_WINDOW = 30        # 觀測天數 window
 MIN_BUY_DAYS = 20       # 最少買超天數門檻
-MAX_AMPLITUDE = 20.0    # 振幅門檻上限 (%) -> 已從 10.0% 放寬至 20.0%
+MAX_AMPLITUDE = 20.0    # 振幅門檻上限 (%)
 
 SENDER_EMAIL = os.getenv("SENDER_EMAIL")
 SENDER_PASSWORD = os.getenv("SENDER_PASSWORD")
@@ -20,7 +20,7 @@ FINMIND_TOKEN = os.getenv("FINMIND_TOKEN", "")
 def get_institutional_data(stock_id):
     """取得 FinMind 法人買超資料"""
     try:
-        DL = Load()
+        DL = DataLoader()
         if FINMIND_TOKEN:
             DL.login_by_token(api_token=FINMIND_TOKEN)
         
