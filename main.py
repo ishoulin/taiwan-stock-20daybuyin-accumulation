@@ -8,11 +8,11 @@ import pandas as pd
 import yfinance as yf
 from FinMind.data import DataLoader
 
-# ================= 策略與系統參數設定 =================
-DAYS_WINDOW = 30        # 觀測天數 window
-MIN_BUY_DAYS = 20       # 最少買超天數門檻
+# ================= 策略與系統參數設定 (優化版: 20日/12勝率) =================
+DAYS_WINDOW = 20        # 觀測天數 window (約 1 個日曆月)
+MIN_BUY_DAYS = 12       # 最少買超天數門檻 (勝率 >= 60%)
 MAX_AMPLITUDE = 20.0    # 振幅門檻上限 (%)
-NEAR_BUY_DAYS = 15      # 次級觀察：近達標買超天數門檻
+NEAR_BUY_DAYS = 8       # 次級觀察：近達標買超天數門檻 (8~11天)
 
 SENDER_EMAIL = os.getenv("SENDER_EMAIL")
 SENDER_PASSWORD = os.getenv("SENDER_PASSWORD")
@@ -41,9 +41,10 @@ def get_all_taiwan_stock_ids(dl):
         return ["2330", "2454", "2303", "2317", "3037", "2382", "3231", "6669"]
 
 def get_institutional_data(dl, stock_id):
-    """取得 FinMind 法人買超資料並計算近 30 交易日買超天數"""
+    """取得 FinMind 法人買超資料並計算近 20 交易日買超天數"""
     try:
-        start_date = (pd.Timestamp.now() - pd.Timedelta(days=60)).strftime('%Y-%m-%d')
+        # 抓取近 40 日資料以確保包含 20 個完整交易日
+        start_date = (pd.Timestamp.now() - pd.Timedelta(days=40)).strftime('%Y-%m-%d')
         df = dl.taiwan_stock_institutional_investors_buy_sell(
             stock_id=stock_id,
             start_date=start_date
@@ -61,15 +62,15 @@ def get_institutional_data(dl, stock_id):
         return 0, 0
 
 def get_stock_amplitude(stock_id):
-    """取得股票近 30 個交易日最高低點振幅 (%)"""
+    """取得股票近 20 個交易日最高低點振幅 (%)"""
     try:
         ticker = f"{stock_id}.TW"
         stock = yf.Ticker(ticker)
-        hist = stock.history(period="2m")
+        hist = stock.history(period="1m")
         if hist.empty or len(hist) < DAYS_WINDOW:
             ticker = f"{stock_id}.TWO"
             stock = yf.Ticker(ticker)
-            hist = stock.history(period="2m")
+            hist = stock.history(period="1m")
             
         recent_hist = hist.tail(DAYS_WINDOW)
         if recent_hist.empty:
@@ -109,7 +110,7 @@ def send_email(subject, body):
         print(f"❌ Email 發送失敗，錯誤訊息: {e}")
 
 def main():
-    print("🚀 啟動台股全市場分層籌碼收集掃描引擎...")
+    print("🚀 啟動台股全市場分層籌碼收集掃描引擎 (20日/12勝率優化版)...")
     
     dl = DataLoader()
     if FINMIND_TOKEN:
@@ -120,13 +121,13 @@ def main():
     # 儲存三分層結果
     perfect_matches = []  # 核心雙門檻
     high_buy_matches = [] # 備選 A：買超達標，振幅超標 (>20%)
-    low_amp_matches = []  # 備選 B：低振幅 (<=20%)，買超近達標 (15~19天)
+    low_amp_matches = []  # 備選 B：低振幅 (<=20%)，買超近達標 (8~11天)
     
     scanned_count = 0
     error_count = 0
 
     total_stocks = len(stock_list)
-    print(f"📡 開始進行 {total_stocks} 檔純個股之分層籌碼與振幅比對...")
+    print(f"📡 開始進行 {total_stocks} 档純個股之分層籌碼與振幅比對...")
 
     for idx, stock_id in enumerate(stock_list, 1):
         try:
@@ -143,12 +144,12 @@ def main():
                 perfect_matches.append(res)
                 print(f"[{idx}/{total_stocks}] 精選 -> {res}")
             
-            # 2. 備選 A：買超達標 (>=20天)，但振幅偏高 (>20%)
+            # 2. 備選 A：買超達標 (>=12天)，但振幅偏高 (>20%)
             elif is_buy_pass and amplitude > MAX_AMPLITUDE:
                 res = f"・[{stock_id}] 買超天數: {buy_days}/{total_days} 天 | 振幅: {amplitude}% (籌碼集中，等待振幅收斂)"
                 high_buy_matches.append(res)
                 
-            # 3. 備選 B：振幅符合 (<=20%)，但買超接近達標 (15~19天)
+            # 3. 備選 B：振幅符合 (<=20%)，但買超接近達標 (8~11天)
             elif is_amp_pass and NEAR_BUY_DAYS <= buy_days < MIN_BUY_DAYS:
                 res = f"・[{stock_id}] 買超天數: {buy_days}/{total_days} 天 | 振幅: {amplitude}% (低波動壓盤，法人升溫中)"
                 low_amp_matches.append(res)
@@ -184,7 +185,7 @@ def main():
     body += "👀 備選觀察區（符合單一條件之潛力股）：\n\n"
     
     # 備選區 A
-    body += f"【類別 A：法人持續進場（買超 ≥ {MIN_BUY_DAYS} 天），等待振幅收斂】({len(high_buy_matches)} 檔)\n"
+    body += f"【類別 A：法人持續進場（買超 ≥ {MIN_BUY_DAYS}/{DAYS_WINDOW} 天），等待振幅收斂】({len(high_buy_matches)} 檔)\n"
     if high_buy_matches:
         body += "\n".join(high_buy_matches) + "\n\n"
     else:
