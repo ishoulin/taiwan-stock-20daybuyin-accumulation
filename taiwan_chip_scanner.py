@@ -10,12 +10,12 @@ from FinMind.data import DataLoader
 
 # ================= 策略與系統參數設定 =================
 DAYS_WINDOW = 20        # 觀測天數 window (近 20 個交易日)
-MIN_BUY_DAYS = 15       # 核心精選買超天數門檻15天
+MIN_BUY_DAYS = 16       # 核心精選買超天數門檻16天
 MAX_AMPLITUDE = 20.0    # 振幅門檻上限 (%)
 
 # 備選觀察門檻
-ALT_A_BUY_DAYS = 13     # 備選 A：買超 >= 13 天 (振幅 > 20%)
-ALT_B_MIN_BUY = 10       # 備選 B：買超 10~12 天 (振幅 <= 20%)
+ALT_A_BUY_DAYS = 14     # 備選 A：買超 >= 14 天 (振幅 > 20%)
+ALT_B_MIN_BUY = 11       # 備選 B：買超 11~13 天 (振幅 <= 20%)
 
 SENDER_EMAIL = os.getenv("SENDER_EMAIL")
 SENDER_PASSWORD = os.getenv("SENDER_PASSWORD")
