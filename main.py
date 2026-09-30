@@ -138,22 +138,22 @@ def main():
             is_buy_pass = buy_days >= MIN_BUY_DAYS
             is_amp_pass = 0 < amplitude <= MAX_AMPLITUDE
 
-            # 1. 雙門檻精選
+            # 1. 雙門檻精選 (買超 >= 12 天 且 振幅 <= 20%)
             if is_buy_pass and is_amp_pass:
                 res = f"🔥 [{stock_id}] 買超天數: {buy_days}/{total_days} 天 | 振幅: {amplitude}%"
                 perfect_matches.append(res)
                 print(f"[{idx}/{total_stocks}] 精選 -> {res}")
             
-            # 2. 備選 A：買超達標 (>=12天)，但振幅偏高 (>20%)
-            elif is_buy_pass and amplitude > MAX_AMPLITUDE:
+            # 2. 備選 A：買超達標 (>=10天)，但振幅偏高 (>20%)
+            elif buy_days >= 10 and amplitude > MAX_AMPLITUDE:
                 res = f"・[{stock_id}] 買超天數: {buy_days}/{total_days} 天 | 振幅: {amplitude}% (籌碼集中，等待振幅收斂)"
                 high_buy_matches.append(res)
                 
-            # 3. 備選 B：振幅符合 (<=20%)，但買超接近達標 (8~11天)
-            elif is_amp_pass and NEAR_BUY_DAYS <= buy_days < MIN_BUY_DAYS:
+            # 3. 備選 B：振幅符合 (<=20%)，但買超接近達標 (7~10天)
+            elif is_amp_pass and 7 <= buy_days <= 10:
                 res = f"・[{stock_id}] 買超天數: {buy_days}/{total_days} 天 | 振幅: {amplitude}% (低波動壓盤，法人升溫中)"
                 low_amp_matches.append(res)
-
+            
             # 每 50 檔輸出 log 進度
             if idx % 50 == 0:
                 print(f"⏳ 掃描進度: {idx}/{total_stocks} ({(idx/total_stocks)*100:.1f}%) | 雙門檻: {len(perfect_matches)} | 單項備選: {len(high_buy_matches)+len(low_amp_matches)}")
