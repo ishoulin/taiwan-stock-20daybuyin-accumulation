@@ -24,7 +24,7 @@ FINMIND_TOKEN = os.getenv("FINMIND_TOKEN", "")
 
 def get_pure_stock_info(dl):
     """取得全台股上市與上櫃「純普通個股」清單（排除 ETF、權證、特種股）"""
-    print("🔍 [1/3] 正在過濾並取得全台股純普通股清單...")
+    print("🔍 [1/4] 正在過濾並取得全台股純普通股清單...")
     try:
         df = dl.taiwan_stock_info()
         if df is None or df.empty:
@@ -33,7 +33,7 @@ def get_pure_stock_info(dl):
 
         df_filtered = df[df['type'].isin(['twse', 'tpex'])].copy()
         
-        # 排除非普通股類別 (ETF、權證、憑證等)
+        # 排除非普通股類別
         exclude_categories = ['ETF', '存託憑證', '受益證券', '認購權證', '認售權證', '指數投資證券']
         if 'industry_category' in df_filtered.columns:
             df_filtered = df_filtered[~df_filtered['industry_category'].isin(exclude_categories)]
@@ -46,12 +46,8 @@ def get_pure_stock_info(dl):
         print(f"❌ 取得個股清單失敗，錯誤: {e}")
         return []
 
-def process_single_stock(stock_id, dl, start_date):
-    """
-    【單檔處理核心】獨立抓取與計算單檔股票的 20 日振幅與買超天數
-    """
-    # 1. 抓取 K 線計算振幅 (yfinance)
-    amplitude = None
+def calc_amplitude_single(stock_id):
+    """單檔股票 20 日振幅計算 (yfinance)"""
     for suffix in [".TW", ".TWO"]:
         try:
             ticker = f"{stock_id}{suffix}"
@@ -61,15 +57,14 @@ def process_single_stock(stock_id, dl, start_date):
                 highest = hist['High'].max()
                 lowest = hist['Low'].min()
                 if lowest > 0 and not pd.isna(lowest) and not pd.isna(highest):
-                    amplitude = round(float(((highest - lowest) / lowest) * 100), 2)
-                    break
+                    amp = round(float(((highest - lowest) / lowest) * 100), 2)
+                    return (stock_id, amp)
         except Exception:
             continue
+    return None
 
-    if amplitude is None:
-        return None
-
-    # 2. 抓取三大法人籌碼 (FinMind)
+def fetch_chip_single(stock_id, dl, start_date):
+    """單檔股票法人籌碼計算 (FinMind)"""
     try:
         df_chip = dl.taiwan_stock_institutional_investors_buy_sell(
             stock_id=stock_id,
@@ -78,7 +73,6 @@ def process_single_stock(stock_id, dl, start_date):
         if df_chip is None or df_chip.empty:
             return None
 
-        # 加總三大法人每日淨買賣超
         df_daily = df_chip.groupby('date')['buy_sell'].sum().reset_index()
         recent_20 = df_daily.sort_values('date').tail(DAYS_WINDOW)
         
@@ -87,39 +81,9 @@ def process_single_stock(stock_id, dl, start_date):
 
         buy_days = int((recent_20['buy_sell'] > 0).sum())
         total_days = len(recent_20)
-
-        return (stock_id, buy_days, total_days, amplitude)
+        return (stock_id, buy_days, total_days)
     except Exception:
         return None
-
-def scan_all_stocks_parallel(stock_list, dl):
-    """
-    【多執行緒併行掃描】平衡速度與 stability，約 3~6 分鐘跑完全台股
-    """
-    print("⚡ [2/3] 啟動多執行緒併行掃描全台股 K 線與法人籌碼...")
-    start_date = (pd.Timestamp.now() - pd.Timedelta(days=40)).strftime('%Y-%m-%d')
-    
-    results = []
-    # 使用 12 個 Worker 平行抓取，避免 API 頻率過高被封鎖
-    with ThreadPoolExecutor(max_workers=12) as executor:
-        futures = {
-            executor.submit(process_single_stock, stock_id, dl, start_date): stock_id 
-            for stock_id in stock_list
-        }
-        
-        completed_count = 0
-        total = len(futures)
-        for future in as_completed(futures):
-            completed_count += 1
-            if completed_count % 300 == 0 or completed_count == total:
-                print(f"⏳ 掃描進度: {completed_count}/{total} ({round(completed_count/total*100, 1)}%)")
-            
-            res = future.result()
-            if res is not None:
-                results.append(res)
-
-    print(f"✅ 完成 {len(results)} 檔個股之有效籌碼與振幅比對！")
-    return results
 
 def send_email(subject, body):
     """發送 Gmail SMTP 戰報"""
@@ -145,27 +109,59 @@ def send_email(subject, body):
 
 def main():
     start_time = time.time()
-    print("🚀 啟動台股全市場穩健多執行緒籌碼掃描引擎...")
+    print("🚀 啟動台股全市場兩階段流線型籌碼掃描引擎...")
 
     dl = DataLoader()
     if FINMIND_TOKEN:
         dl.login_by_token(api_token=FINMIND_TOKEN)
 
-    # 1. 取得純個股清單
+    # 1. 取得個股清單
     stock_list = get_pure_stock_info(dl)
     if not stock_list:
         print("❌ 無法取得股票清單，程式中斷。")
         return
 
-    # 2. 多執行緒併行掃描
-    scan_results = scan_all_stocks_parallel(stock_list, dl)
+    # 2. 第一階段：併行計算全市場 20 日振幅 (yfinance)
+    print("⚡ [2/4] 第一階段：極速掃描全市場 K 線與振幅 (yfinance)...")
+    amp_dict = {}
+    with ThreadPoolExecutor(max_workers=20) as executor:
+        futures = {executor.submit(calc_amplitude_single, sid): sid for sid in stock_list}
+        for future in as_completed(futures):
+            res = future.result()
+            if res is not None:
+                sid, amp = res
+                amp_dict[sid] = amp
 
+    print(f"✅ 成功計算出 {len(amp_dict)} 檔有效 K 線振幅！")
+
+    # 3. 篩選出潛力池（為備選 A 留出彈性，振幅放大至 35% 內進行籌碼比對）
+    candidate_stocks = [sid for sid, amp in amp_dict.items() if 0 < amp <= 35.0]
+    print(f"🎯 [3/4] 第二階段：鎖定 {len(candidate_stocks)} 檔低/中波動潛力股，進行 FinMind 籌碼精準查詢...")
+
+    # 4. 第二階段：僅對潛力個股查詢籌碼 (避免觸發 FinMind API Limit)
+    start_date = (pd.Timestamp.now() - pd.Timedelta(days=40)).strftime('%Y-%m-%d')
+    chip_dict = {}
+    
+    # 限制 5 個 Worker 以確保控制 API 請求頻率
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        futures = {executor.submit(fetch_chip_single, sid, dl, start_date): sid for sid in candidate_stocks}
+        for future in as_completed(futures):
+            res = future.result()
+            if res is not None:
+                sid, b_days, t_days = res
+                chip_dict[sid] = (b_days, t_days)
+
+    print(f"✅ 成功完成 {len(chip_dict)} 檔個股之籌碼精準比對！")
+
+    # 5. 邏輯交叉比對與分類
     perfect_matches = []   # 核心雙門檻 (買超>=12天, 振幅<=20%)
     high_buy_matches = []  # 備選 A (買超>=10天, 振幅>20%)
     low_amp_matches = []   # 備選 B (買超 7~11天, 振幅<=20%)
 
-    # 3. 邏輯分類比對
-    for stock_id, buy_days, total_days, amplitude in scan_results:
+    scanned_count = len(chip_dict)
+
+    for stock_id, (buy_days, total_days) in chip_dict.items():
+        amplitude = amp_dict[stock_id]
         is_buy_pass = buy_days >= MIN_BUY_DAYS       # >= 12 天
         is_amp_pass = 0 < amplitude <= MAX_AMPLITUDE  # <= 20%
 
@@ -173,7 +169,7 @@ def main():
         if is_buy_pass and is_amp_pass:
             perfect_matches.append(f"🔥 [{stock_id}] 買超天數: {buy_days}/{total_days} 天 | 振幅: {amplitude}%")
         
-        # 👀 備選 A：買超 >= 10 天，但振幅偏高 (> 20%)
+        # 👀 備選 A：買超 >= 10 天，但振幅偏高 (20% ~ 35%)
         elif buy_days >= ALT_A_BUY_DAYS and amplitude > MAX_AMPLITUDE:
             high_buy_matches.append(f"・[{stock_id}] 買超天數: {buy_days}/{total_days} 天 | 振幅: {amplitude}% (籌碼集中，等待振幅收斂)")
             
@@ -181,13 +177,13 @@ def main():
         elif is_amp_pass and ALT_B_MIN_BUY <= buy_days < MIN_BUY_DAYS:
             low_amp_matches.append(f"・[{stock_id}] 買超天數: {buy_days}/{total_days} 天 | 振幅: {amplitude}% (低波動壓盤，法人升溫中)")
 
-    # 4. 組裝郵件報告
+    # 6. 組裝郵件報告
     today_str = pd.Timestamp.now().strftime('%Y-%m-%d')
     subject = f"【全台股籌碼戰報】{today_str} - 雙門檻: {len(perfect_matches)} 檔 | 備選: {len(high_buy_matches)+len(low_amp_matches)} 檔"
 
     body = f"📊 全台股靜默籌碼收集掃描報告 ({today_str})\n"
     body += f"篩選標準：近 {DAYS_WINDOW} 交易日法人買超 ≥ {MIN_BUY_DAYS} 天，且價格振幅 ≤ {MAX_AMPLITUDE}%\n"
-    body += f"掃描範圍：台股上市櫃純個股（完成 {len(scan_results)} 檔精準比對）\n"
+    body += f"掃描範圍：台股上市櫃純個股（完成 {scanned_count} 檔精準比對）\n"
     body += "==================================================\n\n"
 
     if perfect_matches:
@@ -209,7 +205,7 @@ def main():
     elapsed_time = round(time.time() - start_time, 1)
     body += "==================================================\n"
     body += f"📈 系統執行摘要：\n"
-    body += f"- 總比對個股: {len(scan_results)} 檔\n"
+    body += f"- 總比對個股: {scanned_count} 檔\n"
     body += f"- 雙門檻精選: {len(perfect_matches)} 檔\n"
     body += f"- 備選觀察總數: {len(high_buy_matches) + len(low_amp_matches)} 檔\n"
     body += f"- 腳本總耗時: {elapsed_time} 秒\n"
