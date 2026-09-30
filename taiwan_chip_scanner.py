@@ -55,7 +55,7 @@ def process_single_stock(stock_id, dl, start_date):
     for suffix in [".TW", ".TWO"]:
         try:
             ticker = f"{stock_id}{suffix}"
-            df_k = yf.Ticker(ticker).history(period="1m")
+            df_k = yf.Ticker(ticker).history(period="1mo")
             if not df_k.empty and len(df_k) >= 5:
                 hist = df_k.tail(DAYS_WINDOW)
                 highest = hist['High'].max()
