@@ -63,27 +63,46 @@ def calc_amplitude_single(stock_id):
             continue
     return None
 
-def fetch_chip_single(stock_id, dl, start_date):
-    """單檔股票法人籌碼計算 (FinMind)"""
+def fetch_all_chips_batch(dl, target_stocks):
+    """
+    【批次極速版】1 次 API 請求抓取全市場籌碼，徹底解決 Rate Limit 問題
+    """
+    print(f"🎯 [3/4] 第二階段：發起單次全市場籌碼請求 (鎖定 {len(target_stocks)} 檔潛力股)...")
+    start_date = (pd.Timestamp.now() - pd.Timedelta(days=40)).strftime('%Y-%m-%d')
+    
     try:
-        df_chip = dl.taiwan_stock_institutional_investors_buy_sell(
-            stock_id=stock_id,
-            start_date=start_date
-        )
-        if df_chip is None or df_chip.empty:
-            return None
-
-        df_daily = df_chip.groupby('date')['buy_sell'].sum().reset_index()
-        recent_20 = df_daily.sort_values('date').tail(DAYS_WINDOW)
+        # 單次請求抓取全市場法人買賣超
+        df_chip = dl.taiwan_stock_institutional_investors_buy_sell(start_date=start_date)
         
-        if len(recent_20) < 5:
-            return None
+        if df_chip is None or df_chip.empty:
+            print("⚠ 全市場籌碼一次性請求返回空值，嘗試備用抓取...")
+            return {}
 
-        buy_days = int((recent_20['buy_sell'] > 0).sum())
-        total_days = len(recent_20)
-        return (stock_id, buy_days, total_days)
-    except Exception:
-        return None
+        # 確保資料型別正確
+        df_chip['stock_id'] = df_chip['stock_id'].astype(str)
+        target_set = set(target_stocks)
+        df_chip = df_chip[df_chip['stock_id'].isin(target_set)]
+
+        if df_chip.empty:
+            print("⚠ 過濾後無相符籌碼資料！")
+            return {}
+
+        # 每日各法人買買超加總
+        df_daily = df_chip.groupby(['stock_id', 'date'])['buy_sell'].sum().reset_index()
+
+        chip_dict = {}
+        for stock_id, group in df_daily.groupby('stock_id'):
+            recent_20 = group.sort_values('date').tail(DAYS_WINDOW)
+            if len(recent_20) >= 5:
+                buy_days = int((recent_20['buy_sell'] > 0).sum())
+                chip_dict[stock_id] = (buy_days, len(recent_20))
+
+        print(f"✅ 成功完成 {len(chip_dict)} 檔個股之籌碼比對！")
+        return chip_dict
+
+    except Exception as e:
+        print(f"❌ 籌碼批次下載發生錯誤: {e}")
+        return {}
 
 def send_email(subject, body):
     """發送 Gmail SMTP 戰報"""
@@ -134,24 +153,11 @@ def main():
 
     print(f"✅ 成功計算出 {len(amp_dict)} 檔有效 K 線振幅！")
 
-    # 3. 篩選出潛力池（為備選 A 留出彈性，振幅放大至 35% 內進行籌碼比對）
+    # 3. 篩選出潛力池（振幅 <= 35.0% 進行籌碼比對）
     candidate_stocks = [sid for sid, amp in amp_dict.items() if 0 < amp <= 35.0]
-    print(f"🎯 [3/4] 第二階段：鎖定 {len(candidate_stocks)} 檔低/中波動潛力股，進行 FinMind 籌碼精準查詢...")
 
-    # 4. 第二階段：僅對潛力個股查詢籌碼 (避免觸發 FinMind API Limit)
-    start_date = (pd.Timestamp.now() - pd.Timedelta(days=40)).strftime('%Y-%m-%d')
-    chip_dict = {}
-    
-    # 限制 5 個 Worker 以確保控制 API 請求頻率
-    with ThreadPoolExecutor(max_workers=5) as executor:
-        futures = {executor.submit(fetch_chip_single, sid, dl, start_date): sid for sid in candidate_stocks}
-        for future in as_completed(futures):
-            res = future.result()
-            if res is not None:
-                sid, b_days, t_days = res
-                chip_dict[sid] = (b_days, t_days)
-
-    print(f"✅ 成功完成 {len(chip_dict)} 檔個股之籌碼精準比對！")
+    # 4. 第二階段：單次全市場請求籌碼
+    chip_dict = fetch_all_chips_batch(dl, candidate_stocks)
 
     # 5. 邏輯交叉比對與分類
     perfect_matches = []   # 核心雙門檻 (買超>=12天, 振幅<=20%)
