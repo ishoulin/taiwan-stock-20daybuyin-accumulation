@@ -65,20 +65,20 @@ def calc_amplitude_single(stock_id):
 
 def fetch_all_chips_batch(dl, target_stocks):
     """
-    【批次極速版】1 次 API 請求抓取全市場籌碼，徹底解決 Rate Limit 問題
+    【正確 API 版】1 次 API 請求抓取全市場法人籌碼
     """
     print(f"🎯 [3/4] 第二階段：發起單次全市場籌碼請求 (鎖定 {len(target_stocks)} 檔潛力股)...")
     start_date = (pd.Timestamp.now() - pd.Timedelta(days=40)).strftime('%Y-%m-%d')
     
     try:
-        # 單次請求抓取全市場法人買賣超
-        df_chip = dl.taiwan_stock_institutional_investors_buy_sell(start_date=start_date)
+        # 正確的方法名稱：taiwan_stock_institutional_investors
+        df_chip = dl.taiwan_stock_institutional_investors(start_date=start_date)
         
         if df_chip is None or df_chip.empty:
-            print("⚠ 全市場籌碼一次性請求返回空值，嘗試備用抓取...")
+            print("⚠ 全市場籌碼一次性請求返回空值！")
             return {}
 
-        # 確保資料型別正確
+        # 確保資料型態正確
         df_chip['stock_id'] = df_chip['stock_id'].astype(str)
         target_set = set(target_stocks)
         df_chip = df_chip[df_chip['stock_id'].isin(target_set)]
@@ -87,14 +87,23 @@ def fetch_all_chips_batch(dl, target_stocks):
             print("⚠ 過濾後無相符籌碼資料！")
             return {}
 
-        # 每日各法人買買超加總
-        df_daily = df_chip.groupby(['stock_id', 'date'])['buy_sell'].sum().reset_index()
+        # 計算單日淨買賣超 (buy - sell)
+        if 'buy_sell' in df_chip.columns:
+            df_chip['net_buy'] = df_chip['buy_sell']
+        elif 'buy' in df_chip.columns and 'sell' in df_chip.columns:
+            df_chip['net_buy'] = df_chip['buy'] - df_chip['sell']
+        else:
+            print("⚠ 無法識別籌碼買賣超欄位！")
+            return {}
+
+        # 每日各法人淨買賣超加總
+        df_daily = df_chip.groupby(['stock_id', 'date'])['net_buy'].sum().reset_index()
 
         chip_dict = {}
         for stock_id, group in df_daily.groupby('stock_id'):
             recent_20 = group.sort_values('date').tail(DAYS_WINDOW)
             if len(recent_20) >= 5:
-                buy_days = int((recent_20['buy_sell'] > 0).sum())
+                buy_days = int((recent_20['net_buy'] > 0).sum())
                 chip_dict[stock_id] = (buy_days, len(recent_20))
 
         print(f"✅ 成功完成 {len(chip_dict)} 檔個股之籌碼比對！")
