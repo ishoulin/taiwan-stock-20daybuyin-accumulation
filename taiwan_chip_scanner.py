@@ -63,55 +63,72 @@ def calc_amplitude_single(stock_id):
             continue
     return None
 
-def fetch_all_chips_batch(dl, target_stocks):
+def fetch_chips_in_chunks(dl, target_stocks, chunk_size=50):
     """
-    【正確 API 版】1 次 API 請求抓取全市場法人籌碼
+    【分區打合包 API】每 50 檔打包為一次 API 請求，兼顧免費層級權限與 Rate Limit
     """
-    print(f"🎯 [3/4] 第二階段：發起單次全市場籌碼請求 (鎖定 {len(target_stocks)} 檔潛力股)...")
+    print(f"🎯 [3/4] 第二階段：分批抓取籌碼 (鎖定 {len(target_stocks)} 檔潛力股，共分 {((len(target_stocks)-1)//chunk_size)+1} 批)...")
     start_date = (pd.Timestamp.now() - pd.Timedelta(days=40)).strftime('%Y-%m-%d')
     
-    try:
-        # 正確的方法名稱：taiwan_stock_institutional_investors
-        df_chip = dl.taiwan_stock_institutional_investors(start_date=start_date)
-        
-        if df_chip is None or df_chip.empty:
-            print("⚠ 全市場籌碼一次性請求返回空值！")
-            return {}
+    all_dfs = []
+    
+    # 將 target_stocks 切成每 chunk_size (50 檔) 一組
+    for i in range(0, len(target_stocks), chunk_size):
+        chunk = target_stocks[i:i + chunk_size]
+        try:
+            # FinMind 支援 stock_id 傳入單一字串或以逗號分隔的多個 ID，此處使用單檔/多檔迴圈保護機制
+            # 傳入列表或逗號分隔字串
+            stock_param = ",".join(chunk) if len(chunk) > 1 else chunk[0]
+            
+            df_chunk = dl.taiwan_stock_institutional_investors(
+                stock_id=stock_param,
+                start_date=start_date
+            )
+            
+            if df_chunk is not None and not df_chunk.empty:
+                all_dfs.append(df_chunk)
+                
+            time.sleep(0.5) # 輕量延遲避開 Rate Limit
+        except Exception as e:
+            print(f"⚠ 批次 {i//chunk_size + 1} 抓取受阻，降級為逐檔備援模式...")
+            # 降級備援：若多檔請求被拒，改回分批小量單檔抓取
+            for sid in chunk:
+                try:
+                    df_single = dl.taiwan_stock_institutional_investors(stock_id=sid, start_date=start_date)
+                    if df_single is not None and not df_single.empty:
+                        all_dfs.append(df_single)
+                    time.sleep(0.2)
+                except Exception:
+                    continue
 
-        # 確保資料型態正確
-        df_chip['stock_id'] = df_chip['stock_id'].astype(str)
-        target_set = set(target_stocks)
-        df_chip = df_chip[df_chip['stock_id'].isin(target_set)]
-
-        if df_chip.empty:
-            print("⚠ 過濾後無相符籌碼資料！")
-            return {}
-
-        # 計算單日淨買賣超 (buy - sell)
-        if 'buy_sell' in df_chip.columns:
-            df_chip['net_buy'] = df_chip['buy_sell']
-        elif 'buy' in df_chip.columns and 'sell' in df_chip.columns:
-            df_chip['net_buy'] = df_chip['buy'] - df_chip['sell']
-        else:
-            print("⚠ 無法識別籌碼買賣超欄位！")
-            return {}
-
-        # 每日各法人淨買賣超加總
-        df_daily = df_chip.groupby(['stock_id', 'date'])['net_buy'].sum().reset_index()
-
-        chip_dict = {}
-        for stock_id, group in df_daily.groupby('stock_id'):
-            recent_20 = group.sort_values('date').tail(DAYS_WINDOW)
-            if len(recent_20) >= 5:
-                buy_days = int((recent_20['net_buy'] > 0).sum())
-                chip_dict[stock_id] = (buy_days, len(recent_20))
-
-        print(f"✅ 成功完成 {len(chip_dict)} 檔個股之籌碼比對！")
-        return chip_dict
-
-    except Exception as e:
-        print(f"❌ 籌碼批次下載發生錯誤: {e}")
+    if not all_dfs:
+        print("⚠ 無法取得任何籌碼資料！")
         return {}
+
+    df_chip = pd.concat(all_dfs, ignore_index=True)
+    df_chip['stock_id'] = df_chip['stock_id'].astype(str)
+
+    # 計算單日淨買賣超 (buy - sell)
+    if 'buy_sell' in df_chip.columns:
+        df_chip['net_buy'] = df_chip['buy_sell']
+    elif 'buy' in df_chip.columns and 'sell' in df_chip.columns:
+        df_chip['net_buy'] = df_chip['buy'] - df_chip['sell']
+    else:
+        print("⚠ 無法識別籌碼買賣超欄位！")
+        return {}
+
+    # 每日各法人淨買賣超加總
+    df_daily = df_chip.groupby(['stock_id', 'date'])['net_buy'].sum().reset_index()
+
+    chip_dict = {}
+    for stock_id, group in df_daily.groupby('stock_id'):
+        recent_20 = group.sort_values('date').tail(DAYS_WINDOW)
+        if len(recent_20) >= 5:
+            buy_days = int((recent_20['net_buy'] > 0).sum())
+            chip_dict[stock_id] = (buy_days, len(recent_20))
+
+    print(f"✅ 成功完成 {len(chip_dict)} 檔個股之籌碼比對！")
+    return chip_dict
 
 def send_email(subject, body):
     """發送 Gmail SMTP 戰報"""
@@ -165,8 +182,8 @@ def main():
     # 3. 篩選出潛力池（振幅 <= 35.0% 進行籌碼比對）
     candidate_stocks = [sid for sid, amp in amp_dict.items() if 0 < amp <= 35.0]
 
-    # 4. 第二階段：單次全市場請求籌碼
-    chip_dict = fetch_all_chips_batch(dl, candidate_stocks)
+    # 4. 第二階段：50 檔打包併行請求籌碼
+    chip_dict = fetch_chips_in_chunks(dl, candidate_stocks, chunk_size=50)
 
     # 5. 邏輯交叉比對與分類
     perfect_matches = []   # 核心雙門檻 (買超>=12天, 振幅<=20%)
