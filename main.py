@@ -12,7 +12,7 @@ from FinMind.data import DataLoader
 DAYS_WINDOW = 20        # 觀測天數 window (約 1 個日曆月)
 MIN_BUY_DAYS = 12       # 最少買超天數門檻 (勝率 >= 60%)
 MAX_AMPLITUDE = 20.0    # 振幅門檻上限 (%)
-NEAR_BUY_DAYS = 8       # 次級觀察：近達標買超天數門檻 (8~11天)
+NEAR_BUY_DAYS = 7       # 次級觀察：近達標買超天數門檻 (7~10天)
 
 SENDER_EMAIL = os.getenv("SENDER_EMAIL")
 SENDER_PASSWORD = os.getenv("SENDER_PASSWORD")
