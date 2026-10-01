@@ -46,17 +46,26 @@ def get_pure_stock_info(dl):
         print(f"❌ 取得個股清單失敗，錯誤: {e}")
         return []
 
+# 全局變數設定
+DAYS_WINDOW = 20       # 籌碼計算視窗：近 20 個交易日 (買超 > 14 天)
+AMP_DAYS_WINDOW = 40   # 振幅計算視窗：近 40 個交易日 (約 2 個月)
+
 def calc_amplitude_single(stock_id):
-    """單檔股票 20 日振幅計算 (yfinance)"""
+    """單檔股票 2 個月 (40日) 振幅計算 (yfinance)"""
     for suffix in [".TW", ".TWO"]:
         try:
             ticker = f"{stock_id}{suffix}"
-            df_k = yf.Ticker(ticker).history(period="1mo")
-            if not df_k.empty and len(df_k) >= 5:
+            # 1. 抓取 2 個月歷史 K 線資料
+            df_k = yf.Ticker(ticker).history(period="2mo")
+
+            # 2. 確保有足夠的 K 線資料 (至少 20 筆以上)
+            if not df_k.empty and len(df_k) >= 20:
+                # 取近 40 個交易日
                 hist = df_k.tail(DAYS_WINDOW)
                 highest = hist['High'].max()
                 lowest = hist['Low'].min()
                 if lowest > 0 and not pd.isna(lowest) and not pd.isna(highest):
+                    # 3. 計算 2 個月的高低差振幅 %
                     amp = round(float(((highest - lowest) / lowest) * 100), 2)
                     return (stock_id, amp)
         except Exception:
@@ -177,7 +186,7 @@ def main():
                 sid, amp = res
                 amp_dict[sid] = amp
 
-    print(f"✅ 成功計算出 {len(amp_dict)} 檔有效 K 線振幅！")
+    print(f"✅ 成功計算出 {len(amp_dict)} 檔有效 2 個月振幅！")
 
     # 3. 篩選出潛力池（振幅 <= 35.0% 進行籌碼比對）
     candidate_stocks = [sid for sid, amp in amp_dict.items() if 0 < amp <= 35.0]
