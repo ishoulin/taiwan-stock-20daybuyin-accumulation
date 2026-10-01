@@ -222,11 +222,7 @@ def main():
             f"🔥 [{stock_id}]{name_display} | 買超天數: {buy_days}/{total_days} 天 | 振幅: {amplitude}%"
         )
         # ---------------------------------------------------------
-
-        # 🎯 雙門檻精選
-        if is_buy_pass and is_amp_pass:
-            perfect_matches.append(f"🔥 [{stock_id}] {stock_name} | 買超天數: {buy_days}/{total_days} 天 | 振幅: {amplitude}%")
-        
+               
         # 👀 備選 A：買超 >= 10 天，但振幅偏高 (20% ~ 35%)
         elif buy_days >= ALT_A_BUY_DAYS and amplitude > MAX_AMPLITUDE:
             high_buy_matches.append(f"・[{stock_id}] 買超天數: {buy_days}/{total_days} 天 | 振幅: {amplitude}% (籌碼集中，等待振幅收斂)")
