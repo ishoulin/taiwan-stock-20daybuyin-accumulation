@@ -211,14 +211,14 @@ def main():
         # 👈 2. 加入這段安全的股票名稱查詢與組裝邏輯
         # ---------------------------------------------------------
         if is_buy_pass and is_amp_pass:
-        # 安全的寫法：若 twstock 查不到名稱就回傳 None，絕不引發 KeyError
-        stock_info = twstock.codes.get(stock_id)
-        stock_name = stock_info.name if stock_info else ""
+            # 安全的寫法：若 twstock 查不到名稱就回傳 None，絕不引發 KeyError
+            stock_info = twstock.codes.get(stock_id)
+            stock_name = stock_info.name if stock_info else ""
 
-        # 有名稱就留空格接名稱，沒名稱就保持原樣
-        name_display = f" {stock_name}" if stock_name else ""
+            # 有名稱就留空格接名稱，沒名稱就保持原樣
+            name_display = f" {stock_name}" if stock_name else ""
 
-        perfect_matches.append(
+            perfect_matches.append(
             f"🔥 [{stock_id}]{name_display} | 買超天數: {buy_days}/{total_days} 天 | 振幅: {amplitude}%"
         )
         # ---------------------------------------------------------
