@@ -21,7 +21,7 @@ jobs:
       - name: Install Dependencies
         run: |    
           python -m pip install --upgrade pip
-          pip install yfinance pandas twstock  # 👈 確保加入 twstock
+          pip install yfinance pandas FinMind twstock  # 👈 確保加入 twstock
 
       - name: Run Chip Scanner
         env:
