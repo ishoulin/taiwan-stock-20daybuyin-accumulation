@@ -249,7 +249,7 @@ def main():
     subject = f"【全台股籌碼戰報】{today_str} - 雙門檻: {len(perfect_matches)} 檔 | 備選: {len(high_buy_matches)+len(low_amp_matches)} 檔"
 
     body = f"📊 全台股靜默籌碼收集掃描報告 ({today_str})\n"
-    body += f"篩選標準：近 {DAYS_WINDOW} 交易日法人買超 ≥ {MIN_BUY_DAYS} 天，且價格振幅 ≤ {MAX_AMPLITUDE}%\n"
+    body += f"篩選標準：近 {DAYS_WINDOW} 交易日法人買超 ≥ {MIN_BUY_DAYS} 天，且180天價格振幅 ≤ {MAX_AMPLITUDE}%\n"
     body += f"掃描範圍：台股上市櫃純個股（完成 {scanned_count} 檔精準比對）\n"
     body += "==================================================\n\n"
 
