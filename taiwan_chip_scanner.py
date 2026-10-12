@@ -12,7 +12,7 @@ from FinMind.data import DataLoader
 # ================= 策略與系統參數設定 =================
 DAYS_WINDOW = 20        # 觀測天數 window (近 20 個交易日)
 MIN_BUY_DAYS = 16       # 核心精選買超天數門檻16天
-MAX_AMPLITUDE = 20.0    # 振幅門檻上限 (%)
+MAX_AMPLITUDE = 25.0    # 振幅門檻上限 (%)
 
 # 備選觀察門檻
 ALT_A_BUY_DAYS = 14     # 備選 A：買超 >= 14 天 (振幅 > 20%)
@@ -49,25 +49,33 @@ def get_pure_stock_info(dl):
 
 # 全局變數設定
 DAYS_WINDOW = 20       # 籌碼計算視窗：近 20 個交易日 (買超 > 14 天)
-AMP_DAYS_WINDOW = 40   # 振幅計算視窗：近 40 個交易日 (約 2 個月)
+AMP_DAYS_WINDOW = 120   # 振幅計算視窗：近 120 個交易日 (對應 yfinance 的 6mo 約半年有效交易日)
 
 def calc_amplitude_single(stock_id):
-    """單檔股票 2 個月 (40日) 振幅計算 (yfinance)"""
+    """單檔股票 6 個月 (180日) 振幅計算 (yfinance)"""
     for suffix in [".TW", ".TWO"]:
         try:
             ticker = f"{stock_id}{suffix}"
-            # 1. 抓取 2 個月歷史 K 線資料
-            df_k = yf.Ticker(ticker).history(period="2mo")
+            # 1. 抓取 6 個月歷史 K 線資料
+            df_k = yf.Ticker(ticker).history(period="6mo")
 
-            # 2. 確保有足夠的 K 線資料 (至少 20 筆以上)
-            if not df_k.empty and len(df_k) >= 20:
-                # 取近 40 個交易日
-                hist = df_k.tail(DAYS_WINDOW)
+            # 2. 確保有足夠的 K 線資料 (至少 100 筆以上)
+            if not df_k.empty and len(df_k) >= 100:
+                # 3. 務必使用 AMP_DAYS_WINDOW (120天)，而不是 DAYS_WINDOW (20天)
+                hist = df_k.tail(AMP_DAYS_WINDOW)
                 highest = hist['High'].max()
                 lowest = hist['Low'].min()
+                current_price = hist['Close'].iloc[-1]  # 當前最新收盤價
+                
                 if lowest > 0 and not pd.isna(lowest) and not pd.isna(highest):
-                    # 3. 計算 2 個月的高低差振幅 %
+                    # 4. 計算 6 個月的高低差振幅 %
                     amp = round(float(((highest - lowest) / lowest) * 100), 2)
+
+                    # 5. 【核心防禦：過濾上方解套賣壓】
+                    # 要求現價必須在半年最高價的 85% 以上，徹底避開卡在半山腰的弱勢股
+                    if current_price < highest * 0.85:
+                        return None
+                    
                     return (stock_id, amp)
         except Exception:
             continue
