@@ -39,6 +39,11 @@ def get_pure_stock_info(dl):
         if 'industry_category' in df_filtered.columns:
             df_filtered = df_filtered[~df_filtered['industry_category'].isin(exclude_categories)]
             
+            # 2. 【新增】排除不想掃描的特定產業（例如：食品工業、汽車工業）
+            # 若未來還想排除其他產業（如：金融保險、營建等），直接加進這個清單即可
+            exclude_industries = ['食品工業', '汽車工業']
+            df_filtered = df_filtered[~df_filtered['industry_category'].isin(exclude_industries)]
+               
         # 僅保留 4 碼純數字代號
         stocks = df_filtered[df_filtered['stock_id'].str.contains(r'^\d{4}$', na=False)]['stock_id'].tolist()
         print(f"✅ 成功鎖定 {len(stocks)} 檔台股純個股！")
