@@ -80,7 +80,12 @@ def calc_amplitude_single(stock_id):
                     # 要求現價必須在半年最高價的 85% 以上，徹底避開卡在半山腰的弱勢股
                     if current_price < highest * 0.85:
                         return None
-                    
+                    # 6. 【新增防禦 2：排除近一週股價往下走的標的】
+                    # 比較最新收盤價與 5 個交易日（約一週）前的收盤價
+                    if len(hist) >= 5:
+                        price_5_days_ago = hist['Close'].iloc[-5]
+                        if current_price < price_5_days_ago:
+                            return None  # 近一週呈現下跌趨勢，直接排除                    
                     return (stock_id, amp)
         except Exception:
             continue
@@ -236,7 +241,7 @@ def main():
         )
         # ---------------------------------------------------------
                
-        # 👀 備選 A：買超 >= 10 天，但振幅偏高 (20% ~ 35%)
+        # 👀 備選 A：買超 >= 10 天，但振幅偏高 (20% ~ 35%)，排除一周股價往下
         elif buy_days >= ALT_A_BUY_DAYS and amplitude > MAX_AMPLITUDE:
             high_buy_matches.append(f"・[{stock_id}] 買超天數: {buy_days}/{total_days} 天 | 振幅: {amplitude}% (籌碼集中，等待振幅收斂)")
             
